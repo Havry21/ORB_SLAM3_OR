@@ -17,12 +17,14 @@ class ImageDetector
 {
 public:
     ImageDetector();
+    ImageDetector(std::string modelName);
+    
     ~ImageDetector() = default;
-    std::list<ObjCoord>* processImage(cv::Mat& image, bool showDebugWindow = false);
+    std::list<ObjCoord>* processImage(cv::Mat& image, bool showDebugWindow = true);
 
 private:
     std::string labelsPath = "/models/coco.names";
-    std::string modelPath = "/models/yolo11n.onnx";
+    std::string modelPath = "/models/yolo11l.onnx";
     bool isGPU = true;
     YOLO11Detector detector;
     std::list<ObjCoord> coordinate;

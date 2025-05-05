@@ -20,9 +20,13 @@ def generate_launch_description():
         output=["screen"],
         arguments=[
             "/home/dima/diplom_ros/src/orbslam3_ros2/vocabulary/ORBvoc.txt",
-            # "/home/dima/diplom_ros/src/orbslam3_ros2/config/monocular/TUM1.yaml",
             "/home/dima/diplom_ros/src/orbslam3_ros2/config/monocular/EuRoC.yaml",
+            "false",
         ],
+        parameters=[{
+            "use_visualization": LaunchConfiguration("use_visualization"),
+            "yolo_model": LaunchConfiguration("yolo_model")
+        }]
     )
 
     # ros2 run usb_cam usb_cam_node_exe --ros-args --params-file ~/diplom_ros/src/orbslam3_ros2/config/camera_param.yaml
@@ -33,22 +37,13 @@ def generate_launch_description():
         output=["screen"],
         arguments=["params-file ~/diplom_ros/src/orbslam3_ros2/config/camera_param.yaml"],
     )
-    # camera_node = Node(
-    #     package="v4l2_camera",
-    #     executable="v4l2_camera_node",
-    #     output=["screen"],
-    #     arguments=["video_device:='/dev/video2'"],
-    # )
 
     sim = ExecuteProcess(
         cmd=[
             "ros2",
             "bag",
             "play",
-            # "--loop",
-            # "/home/dima/rosbag2_kitchen",
-            #https://cvg.cit.tum.de/data/datasets/rgbd-dataset/download#freiburg1_floor
-            "/home/dima/Desktop/V1_01_easy/freiburg2_desk",
+            '/media/dima/additional/datasetTUM/freiburg2_desk',
         ],
         output="screen",
     )
@@ -74,6 +69,16 @@ def generate_launch_description():
 
     return LaunchDescription(
         [
+            DeclareLaunchArgument(
+                name="use_visualization",
+                default_value="False",
+                description="Start RViz",
+            ),
+            DeclareLaunchArgument(
+                name="yolo_model",
+                default_value="yolo11n",
+                description="Start RViz",
+            ),
             DeclareLaunchArgument(
                 name="use_rviz",
                 default_value="True",

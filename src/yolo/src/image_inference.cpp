@@ -3,9 +3,17 @@
 #include "image_inference.hpp"
 ImageDetector::ImageDetector()
 {
+    // std::string package_dir = ament_index_cpp::get_package_share_directory("orbslam3");
+    // labelsPath = package_dir + labelsPath;
+    // modelPath = package_dir + modelPath;
+    // detector = YOLO11Detector(modelPath, labelsPath);
+}
+
+ImageDetector::ImageDetector(std::string modelName)
+{
     std::string package_dir = ament_index_cpp::get_package_share_directory("orbslam3");
     labelsPath = package_dir + labelsPath;
-    modelPath = package_dir + modelPath;
+    modelPath = package_dir + "/models/" + modelName +".onnx";
     detector = YOLO11Detector(modelPath, labelsPath);
 }
 

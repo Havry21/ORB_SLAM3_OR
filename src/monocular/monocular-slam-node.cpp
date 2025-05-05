@@ -7,9 +7,18 @@
 
 using std::placeholders::_1;
 
-MonocularSlamNode::MonocularSlamNode(ORB_SLAM3::System* pSLAM)
+MonocularSlamNode::MonocularSlamNode(ORB_SLAM3::System* pSLAM, bool _visualization)
     : Node("ORB_SLAM3_ROS2")
 {
+    this->declare_parameter<bool>("use_visualization", false);
+    this->declare_parameter<std::string>("yolo_model", "yolo11n");
+
+    yoloName = this->get_parameter("yolo_model").as_string();
+    visualization = this->get_parameter("use_visualization").as_bool();
+
+    RCLCPP_INFO(this->get_logger(), "Yolo version %s", yoloName.data());
+    RCLCPP_INFO(this->get_logger(), "Visualization %s", (visualization ? "Enable" : "Disable"));
+
     m_SLAM = pSLAM;
     m_image_subscriber = this->create_subscription<ImageMsg>(
         "/camera/rgb/image_color",
@@ -60,117 +69,199 @@ void MonocularSlamNode::checkKF()
             // Либо добавился, либо удалился кадр
             if (prevSizeOfSet < keyFrameBuff.size())
             {
+                if (!imgProccessComplete)
                 {
-                    std::unique_lock<std::mutex> lock(syncMutex);
-                    std::ranges::sort(keyFrameBuff, ORB_SLAM3::KeyFrame::lId);
-                    lastKF = keyFrameBuff.back();
-                    newDataReady = true;
+                    RCLCPP_INFO(this->get_logger(), "Pass keyFrame");
                 }
-                processCV.notify_all();
-                RCLCPP_INFO(this->get_logger(), "Detect keyFrame keyFrameId = %ld, frameId = %ld, size of bag %ld",
-                            lastKF->mnId, lastKF->mnFrameId, keyFrameBuff.size());
+                else
+                {
+                    {
+                        std::unique_lock<std::mutex> lock(syncMutex);
+                        std::ranges::sort(keyFrameBuff, ORB_SLAM3::KeyFrame::lId);
+                        lastKF = keyFrameBuff.back();
+                        newDataReady = true;
+                    }
+
+                    processCV.notify_all();
+                    RCLCPP_INFO(this->get_logger(), "Detect keyFrame keyFrameId = %ld, frameId = %ld, size of bag %ld",
+                                lastKF->mnId, lastKF->mnFrameId, keyFrameBuff.size());
+                }
             }
             prevSizeOfSet = keyFrameBuff.size();
         }
     }
 }
 
-void MonocularSlamNode::publishPoint(std::vector<geometry_msgs::msg::Point>&& vectToPublish, std_msgs::msg::ColorRGBA& color, geometry_msgs::msg::Vector3& scale)
+void MonocularSlamNode::publishPoint(PointPub& pub, std::vector<geometry_msgs::msg::Point>& vectToPublish, std_msgs::msg::ColorRGBA& color, geometry_msgs::msg::Vector3& scale)
 {
-    static unsigned long int counter = 0;
     std::unique_lock<std::mutex> lock(publishMutex);
-
     visualization_msgs::msg::Marker marker;
     // Задаем основные параметры маркера
     marker.header.frame_id = "camera_frame"; // Система координат
     marker.header.stamp = this->now();
     marker.ns = "points";
-    marker.id = counter;
+    marker.id = 0;
     marker.type = visualization_msgs::msg::Marker::POINTS;
     marker.action = visualization_msgs::msg::Marker::ADD;
 
-    // Размер точек
     marker.scale = scale;
     // Цвет (R, G, B, A)
     marker.color = color;
     marker.lifetime = rclcpp::Duration(0, 0);
     marker.points.insert(marker.points.begin(), vectToPublish.begin(), vectToPublish.end());
 
-    objectPointPublisher->publish(marker);
+    pub->publish(marker);
     RCLCPP_INFO(this->get_logger(), "Publish points");
-    counter++;
 }
 
 void MonocularSlamNode::visualizerLoop()
 {
+    std_msgs::msg::ColorRGBA colorMaps;
+    colorMaps.a = 1.0f;
+    colorMaps.b = 0.0f;
+    colorMaps.r = 0.0f;
+    colorMaps.g = 1.0f;
 
-    std_msgs::msg::ColorRGBA color;
-    color.a = 1.0f;
-    color.b = 0.0f;
-    color.r = 0.0f;
-    color.g = 1.0f;
+    geometry_msgs::msg::Vector3 scaleMaps;
+    scaleMaps.x = 0.005;
+    scaleMaps.y = 0.005;
+    scaleMaps.z = 0.005;
 
-    geometry_msgs::msg::Vector3 scale;
-    scale.x = 0.005;
-    scale.y = 0.005;
-    scale.z = 0.005;
+    std_msgs::msg::ColorRGBA colorObjects;
+    colorObjects.a = 1.0f;
+    colorObjects.b = 0.0f;
+    colorObjects.r = 1.0f;
+    colorObjects.g = 0.0f;
 
-    uint64_t prevSizeOfAllMapPoint = 0;
+    geometry_msgs::msg::Vector3 scaleObjects;
+    scaleObjects.x = 0.04;
+    scaleObjects.y = 0.04;
+    scaleObjects.z = 0.04;
+
+    std::vector<geometry_msgs::msg::Point> pointsMaps;
+    std::vector<geometry_msgs::msg::Point> ObjectPointsUnsort;
+    std::vector<geometry_msgs::msg::Point> ObjectPointsSort;
+
     while (rclcpp::ok() && ! stopThread)
     {
-        std::vector<geometry_msgs::msg::Point> points;
-
         std::unique_lock<std::mutex> lock(syncMutex);
         processCV.wait(lock, [this]() {
             return newDataReady;
         });
         if (stopThread)
             break;
+        auto startTime = std::chrono::steady_clock::now();
+
         auto activeMap = m_SLAM->mpAtlas->GetCurrentMap();
         const auto vpMPs = activeMap->GetAllMapPoints();
 
-        if (vpMPs.size() == prevSizeOfAllMapPoint || vpMPs.empty())
+        if (vpMPs.empty())
             continue;
-        // when changing map
-        if (vpMPs.size() < prevSizeOfAllMapPoint)
-            prevSizeOfAllMapPoint = 0;
 
-        long int size = vpMPs.size() - prevSizeOfAllMapPoint;
-        points.reserve(std::abs(size));
-
-        auto view = std::ranges::drop_view {vpMPs, prevSizeOfAllMapPoint};
-        for (const auto& it : view)
+        for (const auto& it : vpMPs)
         {
             auto pose = it->GetWorldPos();
             geometry_msgs::msg::Point p1;
             p1.x = pose[0];
             p1.z = pose[1];
             p1.y = pose[2];
-            points.push_back(p1);
+            if (std::ranges::find(objectPointId, it->mnId) != objectPointId.end())
+            {
+                ObjectPointsUnsort.push_back(p1);
+                if (ObjectPointsUnsort.size() < 3)
+                {
+                    RCLCPP_INFO(this->get_logger(), "Point coord %.2f,%.2f,%.2f",
+                                p1.x, p1.z, p1.y);
+                }
+            }
+            {
+                pointsMaps.push_back(p1);
+            }
         }
-        // RCLCPP_INFO(this->get_logger(), "done");
 
-        publishPoint(std::move(points), color, scale);
+        if (ObjectPointsUnsort.size() > 2)
+        {
+            RCLCPP_INFO(this->get_logger(), "Num of unsort point %ld", ObjectPointsUnsort.size());
+            auto result = dbScan.cluster(ObjectPointsUnsort);
+            RCLCPP_INFO(this->get_logger(), "Num of objects %ld, point in object %ld, num of noise points %ld",
+                        result.clusters.size(), result.clusters[0].size(), result.noise.size());
+            for (auto& points : result.clusters)
+            {
+                ObjectPointsSort.push_back(foundCentroid(points));
+            }
+        }
+
+        publishPoint(mapPointPublisher, pointsMaps, colorMaps, scaleMaps);
+        publishPoint(objectPointPublisher, ObjectPointsSort, colorObjects, scaleObjects);
+        publishCameraPoses();
+
+        pointsMaps.clear();
+        ObjectPointsSort.clear();
+        ObjectPointsUnsort.clear();
+
+        auto dt = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startTime).count();
+        timePubPoints.push_back(dt);
 
         newDataReady = false;
-        prevSizeOfAllMapPoint = vpMPs.size();
     }
     RCLCPP_INFO(this->get_logger(), "visualizer threade done");
+    {
+        std::unique_lock<std::mutex> lock(resMutex);
+        RCLCPP_INFO(this->get_logger(), "Result \n\r Median postImg %ld ms", this->calculateMedian(timePubPoints));
+    }
+}
+
+void MonocularSlamNode::publishCameraPoses()
+{
+    auto activeMap = m_SLAM->mpAtlas->GetCurrentMap();
+    auto keyFrames = activeMap->GetAllKeyFrames();
+    std::ranges::sort(keyFrames, ORB_SLAM3::KeyFrame::lId);
+
+    std::vector<geometry_msgs::msg::PoseStamped> poses;
+    geometry_msgs::msg::PoseStamped pose;
+
+    for (const auto& kf : keyFrames)
+    {
+        auto Tcw_SE3f = kf->GetPose().inverse();
+        pose.pose.position.x = Tcw_SE3f.translation().x();
+        pose.pose.position.z = Tcw_SE3f.translation().y();
+        pose.pose.position.y = Tcw_SE3f.translation().z();
+        pose.pose.orientation.w = Tcw_SE3f.unit_quaternion().coeffs().w();
+        pose.pose.orientation.x = Tcw_SE3f.unit_quaternion().coeffs().x();
+        pose.pose.orientation.y = Tcw_SE3f.unit_quaternion().coeffs().y();
+        pose.pose.orientation.z = Tcw_SE3f.unit_quaternion().coeffs().z();
+        poses.push_back(pose);
+    }
+    publishCameraPose(poses);
+}
+
+uint64_t MonocularSlamNode::calculateMedian(std::vector<uint64_t>& numbers)
+{
+    std::sort(numbers.begin(), numbers.end());
+
+    size_t size = numbers.size();
+    size_t middle = size / 2;
+
+    if (size % 2 == 0)
+    {
+        return (numbers[middle - 1] + numbers[middle]) / 2.0;
+    }
+    else
+    {
+        return numbers[middle];
+    }
 }
 
 void MonocularSlamNode::imageLoop()
 {
-    std_msgs::msg::ColorRGBA color;
-    color.a = 1.0f;
-    color.b = 0.0f;
-    color.r = 1.0f;
-    color.g = 0.0f;
+    ImageDetector imgDtct(yoloName);
 
-    geometry_msgs::msg::Vector3 scale;
-    scale.x = 0.04;
-    scale.y = 0.04;
-    scale.z = 0.04;
     bool firstKF = true;
+    std::vector<uint64_t> timeDecodeImg;
+    std::vector<uint64_t> timePeriodKF;
+
+    auto startPeriodKF = std::chrono::steady_clock::now();
+
     while (rclcpp::ok() && ! stopThread)
     {
         std::unique_lock<std::mutex> lock(syncMutex);
@@ -179,6 +270,12 @@ void MonocularSlamNode::imageLoop()
         });
         if (stopThread)
             break;
+        imgProccessComplete = false;
+        if (startPeriodKF != std::chrono::steady_clock::now())
+        {
+            auto dt = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startPeriodKF).count();
+            timePeriodKF.push_back(dt);
+        }
 
         if (lastKF != nullptr)
         {
@@ -187,84 +284,75 @@ void MonocularSlamNode::imageLoop()
                 publishStartPose(lastKF->GetPose().inverse());
                 firstKF = false;
             }
-
-            publishCameraPose(lastKF->GetPose().inverse());
+            publishCameraPoses();
+            // publishCameraPose(lastKF->GetPose().inverse());
             auto img = imgBuff.find_by_id(lastKF->mnFrameId);
             if (img.rows > 0)
             {
-                auto objCoord = imgDtct.processImage(img, true);
+                auto startDecodeImgTime = std::chrono::steady_clock::now();
+
+                auto objCoord = imgDtct.processImage(img, visualization);
                 if (objCoord->size() != 0)
                 {
                     RCLCPP_INFO(this->get_logger(), "Detect %ld object", objCoord->size());
-
-                    std::vector<geometry_msgs::msg::Point> pointsVect;
                     for (const auto& coord : *objCoord)
                     {
-                        std::vector<geometry_msgs::msg::Point> pointsOfObject;
-
                         RCLCPP_INFO(this->get_logger(), "Coord {%f,%f,%f} ", coord.x, coord.y, coord.r);
                         auto p = lastKF->GetFeaturesInArea(coord.x, coord.y, coord.r);
-                        if (p.size() > 1)
+                        if (p.size() != 0)
                         {
                             for (const auto& point : p)
                             {
                                 auto _mapPoint = lastKF->GetMapPoint(point);
-                                if (_mapPoint)
+                                if (_mapPoint && ! _mapPoint->isBad())
                                 {
-                                    auto pose = _mapPoint->GetWorldPos();
-                                    geometry_msgs::msg::Point p1;
-                                    p1.x = pose[0];
-                                    p1.z = pose[1];
-                                    p1.y = pose[2];
-                                    pointsOfObject.push_back(p1);
-                                    if (pointsOfObject.size() > 10)
-                                    {
-                                        break;
-                                    }
-                                    RCLCPP_INFO(this->get_logger(), "Point coord {%f, %f, %f}", p1.x, p1.y, p1.z);
-                                    pointsVect.push_back(p1);
-
+                                    objectPointId.push_back(_mapPoint->mnId);
                                 }
                             }
-                            // pointsVect.push_back(foundCentroid(pointsOfObject));
                         }
-                    }
-
-                    if (! pointsVect.empty() && pointsVect.size() < 200)
-                    {
-                        publishPoint(std::move(pointsVect), color, scale);
                     }
                 }
                 RCLCPP_INFO(this->get_logger(), "Image processed successfully");
+                auto dt = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startDecodeImgTime).count();
+                timeDecodeImg.push_back(dt);
             }
             else
             {
                 RCLCPP_INFO(this->get_logger(), "Empy image");
             }
         }
+        startPeriodKF = std::chrono::steady_clock::now();
         newDataReady = false;
+        imgProccessComplete = true;
     }
     RCLCPP_INFO(this->get_logger(), "image detector threade done");
+    auto medPeriodKF = this->calculateMedian(timePeriodKF);
+    auto medProcessImg = this->calculateMedian(timeDecodeImg);
+
+    RCLCPP_INFO(this->get_logger(), "Result \n\r Median perido of KF %ld ms, median processImage %ld ms",
+                medPeriodKF, medProcessImg);
+
+    {
+        std::unique_lock<std::mutex> lock(resMutex);
+        auto med = std::max(medProcessImg, this->calculateMedian(timePubPoints));
+        float kfCompletion = (float) med / (float) medPeriodKF;
+        RCLCPP_INFO(this->get_logger(), "Result \n\r Percentage of keyframe completion %.5f", kfCompletion);
+    }
 }
 
-void MonocularSlamNode::publishCameraPose(Sophus::SE3f Tcw_SE3f)
+void MonocularSlamNode::publishCameraPose(std::vector<geometry_msgs::msg::PoseStamped>& poses)
 {
+    nav_msgs::msg::Path path;
     path.header.frame_id = "camera_frame";
     path.header.stamp = this->now();
 
-    auto pose = geometry_msgs::msg::PoseStamped();
-    pose.header = path.header;
-    pose.pose.position.x = Tcw_SE3f.translation().x();
-    pose.pose.position.z = Tcw_SE3f.translation().y();
-    pose.pose.position.y = Tcw_SE3f.translation().z();
-    pose.pose.orientation.w = Tcw_SE3f.unit_quaternion().coeffs().w();
-    pose.pose.orientation.x = Tcw_SE3f.unit_quaternion().coeffs().x();
-    pose.pose.orientation.y = Tcw_SE3f.unit_quaternion().coeffs().y();
-    pose.pose.orientation.z = Tcw_SE3f.unit_quaternion().coeffs().z();
-    path.poses.push_back(pose);
-
+    for (auto& p : poses)
+    {
+        path.poses.push_back(p);
+    }
     trajectoryPointPublisher->publish(path);
 }
+
 void MonocularSlamNode::publishStartPose(Sophus::SE3f Tcw_SE3f)
 {
     geometry_msgs::msg::TransformStamped transformStamped;
