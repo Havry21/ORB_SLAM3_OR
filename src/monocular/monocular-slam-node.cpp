@@ -4,20 +4,27 @@
 #include <chrono>
 #include <ranges>
 #include <pthread.h>
+#include <yaml-cpp/yaml.h>
 
 using std::placeholders::_1;
 
 MonocularSlamNode::MonocularSlamNode(ORB_SLAM3::System* pSLAM, bool _visualization)
     : Node("ORB_SLAM3_ROS2")
 {
+    package_dir = ament_index_cpp::get_package_share_directory("orbslam3");
+
     this->declare_parameter<bool>("use_visualization", false);
+    this->declare_parameter<bool>("save_imgs", false);
+
     this->declare_parameter<std::string>("yolo_model", "yolo11n");
 
     yoloName = this->get_parameter("yolo_model").as_string();
     visualization = this->get_parameter("use_visualization").as_bool();
+    saveImgs = this->get_parameter("save_imgs").as_bool();
 
     RCLCPP_INFO(this->get_logger(), "Yolo version %s", yoloName.data());
     RCLCPP_INFO(this->get_logger(), "Visualization %s", (visualization ? "Enable" : "Disable"));
+    RCLCPP_INFO(this->get_logger(), "Save img %s", (saveImgs ? "Enable" : "Disable"));
 
     m_SLAM = pSLAM;
     m_image_subscriber = this->create_subscription<ImageMsg>(
@@ -48,11 +55,11 @@ MonocularSlamNode::~MonocularSlamNode()
     stopThread = true;
 
     processCV.notify_all();
-
     RCLCPP_INFO(this->get_logger(), "Notify thread");
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
     m_SLAM->Shutdown();
-    m_SLAM->SaveKeyFrameTrajectoryTUM("KeyFrameTrajectory.txt");
+    m_SLAM->SaveKeyFrameTrajectoryTUM({package_dir + "/result/" + "KeyFrameTrajectory.txt"});
 }
 
 void MonocularSlamNode::checkKF()
@@ -69,23 +76,33 @@ void MonocularSlamNode::checkKF()
             // Либо добавился, либо удалился кадр
             if (prevSizeOfSet < keyFrameBuff.size())
             {
-                if (!imgProccessComplete)
+                // if (! imgProccessComplete)
+                // {
+                //     RCLCPP_INFO(this->get_logger(), "Pass keyFrame");
+                // }
+                // else
+                // {
+                {
+                    std::unique_lock<std::mutex> lock(syncMutex);
+                    std::ranges::sort(keyFrameBuff, ORB_SLAM3::KeyFrame::lId);
+                    lastKF = keyFrameBuff.back();
+                    newDataReady = true;
+                }
+
+                if (! imgProccessComplete)
                 {
                     RCLCPP_INFO(this->get_logger(), "Pass keyFrame");
                 }
                 else
                 {
-                    {
-                        std::unique_lock<std::mutex> lock(syncMutex);
-                        std::ranges::sort(keyFrameBuff, ORB_SLAM3::KeyFrame::lId);
-                        lastKF = keyFrameBuff.back();
-                        newDataReady = true;
-                    }
-
                     processCV.notify_all();
-                    RCLCPP_INFO(this->get_logger(), "Detect keyFrame keyFrameId = %ld, frameId = %ld, size of bag %ld",
-                                lastKF->mnId, lastKF->mnFrameId, keyFrameBuff.size());
                 }
+
+                processPub.notify_all();
+
+                RCLCPP_INFO(this->get_logger(), "Detect keyFrame keyFrameId = %ld, frameId = %ld, size of bag %ld",
+                            lastKF->mnId, lastKF->mnFrameId, keyFrameBuff.size());
+                // }
             }
             prevSizeOfSet = keyFrameBuff.size();
         }
@@ -138,18 +155,16 @@ void MonocularSlamNode::visualizerLoop()
     scaleObjects.y = 0.04;
     scaleObjects.z = 0.04;
 
-    std::vector<geometry_msgs::msg::Point> pointsMaps;
-    std::vector<geometry_msgs::msg::Point> ObjectPointsUnsort;
-    std::vector<geometry_msgs::msg::Point> ObjectPointsSort;
-
     while (rclcpp::ok() && ! stopThread)
     {
-        std::unique_lock<std::mutex> lock(syncMutex);
-        processCV.wait(lock, [this]() {
-            return newDataReady;
-        });
-        if (stopThread)
-            break;
+        {
+            std::unique_lock<std::mutex> lock(syncMutex);
+            processPub.wait(lock, [this]() {
+                return newDataReady;
+            });
+            if (stopThread)
+                break;
+        }
         auto startTime = std::chrono::steady_clock::now();
 
         auto activeMap = m_SLAM->mpAtlas->GetCurrentMap();
@@ -190,10 +205,14 @@ void MonocularSlamNode::visualizerLoop()
                 ObjectPointsSort.push_back(foundCentroid(points));
             }
         }
-
+        publishCameraPoses();
         publishPoint(mapPointPublisher, pointsMaps, colorMaps, scaleMaps);
         publishPoint(objectPointPublisher, ObjectPointsSort, colorObjects, scaleObjects);
         publishCameraPoses();
+
+        sizeOfPointsMaps = pointsMaps.size();
+        sizeOfObjectPointsUnsort = ObjectPointsSort.size();
+        sizeOfObjectPointsSort = ObjectPointsUnsort.size();
 
         pointsMaps.clear();
         ObjectPointsSort.clear();
@@ -254,7 +273,7 @@ uint64_t MonocularSlamNode::calculateMedian(std::vector<uint64_t>& numbers)
 
 void MonocularSlamNode::imageLoop()
 {
-    ImageDetector imgDtct(yoloName);
+    ImageDetector imgDtct(yoloName, visualization, saveImgs);
 
     bool firstKF = true;
     std::vector<uint64_t> timeDecodeImg;
@@ -264,80 +283,110 @@ void MonocularSlamNode::imageLoop()
 
     while (rclcpp::ok() && ! stopThread)
     {
-        std::unique_lock<std::mutex> lock(syncMutex);
-        processCV.wait(lock, [this]() {
-            return newDataReady;
-        });
-        if (stopThread)
-            break;
-        imgProccessComplete = false;
+        ORB_SLAM3::KeyFrame* _lastKF;
+        {
+            std::unique_lock<std::mutex> lock(syncMutex);
+            processCV.wait(lock, [this]() {
+                return newDataReady;
+            });
+            if (stopThread)
+                break;
+            imgProccessComplete = false;
+            _lastKF = lastKF;
+        }
         if (startPeriodKF != std::chrono::steady_clock::now())
         {
             auto dt = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startPeriodKF).count();
             timePeriodKF.push_back(dt);
         }
 
-        if (lastKF != nullptr)
+        if (firstKF)
         {
-            if (firstKF)
+            publishStartPose(_lastKF->GetPose().inverse());
+            firstKF = false;
+        }
+        cv::Mat img;
+        {
+            std::unique_lock<std::mutex> lock(syncMutex);
+            std::string idStr;
+            for (auto& buffElement : imgBuff)
             {
-                publishStartPose(lastKF->GetPose().inverse());
-                firstKF = false;
-            }
-            publishCameraPoses();
-            // publishCameraPose(lastKF->GetPose().inverse());
-            auto img = imgBuff.find_by_id(lastKF->mnFrameId);
-            if (img.rows > 0)
-            {
-                auto startDecodeImgTime = std::chrono::steady_clock::now();
-
-                auto objCoord = imgDtct.processImage(img, visualization);
-                if (objCoord->size() != 0)
+                idStr += " " + std::to_string(buffElement.first);
+                if (buffElement.first == _lastKF->mnFrameId)
                 {
-                    RCLCPP_INFO(this->get_logger(), "Detect %ld object", objCoord->size());
-                    for (const auto& coord : *objCoord)
+                    img = buffElement.second;
+                    break;
+                }
+            }
+            RCLCPP_DEBUG(this->get_logger(), "Looks ids %ld", _lastKF->mnFrameId);
+            RCLCPP_DEBUG(this->get_logger(), "Img ids %s", idStr.data());
+        }
+        if (! img.empty())
+        {
+            auto startDecodeImgTime = std::chrono::steady_clock::now();
+
+            auto objCoord = imgDtct.processImage(img);
+            if (! objCoord->empty())
+            {
+                RCLCPP_INFO(this->get_logger(), "Detect %ld object", objCoord->size());
+                for (const auto& coord : *objCoord)
+                {
+                    RCLCPP_INFO(this->get_logger(), "Coord {%f,%f,%f} ", coord.x, coord.y, coord.r);
+                    // coord.r * 0.8: because there may be a point on the edges that is not visible to the object.
+                    auto p = _lastKF->GetFeaturesInArea(coord.x, coord.y, coord.r * 0.8);
+                    if (! p.empty())
                     {
-                        RCLCPP_INFO(this->get_logger(), "Coord {%f,%f,%f} ", coord.x, coord.y, coord.r);
-                        auto p = lastKF->GetFeaturesInArea(coord.x, coord.y, coord.r);
-                        if (p.size() != 0)
+                        for (const auto& point : p)
                         {
-                            for (const auto& point : p)
+                            auto _mapPoint = _lastKF->GetMapPoint(point);
+                            if (_mapPoint && ! _mapPoint->isBad())
                             {
-                                auto _mapPoint = lastKF->GetMapPoint(point);
-                                if (_mapPoint && ! _mapPoint->isBad())
-                                {
-                                    objectPointId.push_back(_mapPoint->mnId);
-                                }
+                                objectPointId.push_back(_mapPoint->mnId);
                             }
                         }
                     }
                 }
-                RCLCPP_INFO(this->get_logger(), "Image processed successfully");
-                auto dt = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startDecodeImgTime).count();
-                timeDecodeImg.push_back(dt);
             }
-            else
-            {
-                RCLCPP_INFO(this->get_logger(), "Empy image");
-            }
+            auto dt = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startDecodeImgTime).count();
+            timeDecodeImg.push_back(dt);
+            RCLCPP_INFO(this->get_logger(), "Image processed successfully, \n for %ld ms", dt);
         }
+        else
+        {
+            RCLCPP_WARN(this->get_logger(), "Empty image");
+            RCLCPP_DEBUG(this->get_logger(), "Img don't found, frame id = %ld,ketFrame id = %ld", _lastKF->mnFrameId, _lastKF->mnId);
+        }
+
         startPeriodKF = std::chrono::steady_clock::now();
         newDataReady = false;
         imgProccessComplete = true;
     }
-    RCLCPP_INFO(this->get_logger(), "image detector threade done");
+    imgDtct.stopThread();
+
     auto medPeriodKF = this->calculateMedian(timePeriodKF);
     auto medProcessImg = this->calculateMedian(timeDecodeImg);
 
     RCLCPP_INFO(this->get_logger(), "Result \n\r Median perido of KF %ld ms, median processImage %ld ms",
                 medPeriodKF, medProcessImg);
-
+    float kfCompletion = 0.0f;
     {
         std::unique_lock<std::mutex> lock(resMutex);
         auto med = std::max(medProcessImg, this->calculateMedian(timePubPoints));
-        float kfCompletion = (float) med / (float) medPeriodKF;
+        kfCompletion = (float) med / (float) medPeriodKF;
         RCLCPP_INFO(this->get_logger(), "Result \n\r Percentage of keyframe completion %.5f", kfCompletion);
     }
+
+    std::map<std::string, float> resultMap = {
+        {"medPeriodKF", medPeriodKF},
+        {"medProcessImg", medProcessImg},
+        {"kfCompletion", kfCompletion},
+        {"numOfMapPoints", sizeOfPointsMaps},
+        {"numOfObjPoints", sizeOfObjectPointsUnsort},
+        {"numOfFilteredObjPoints", sizeOfObjectPointsSort},
+    };
+    saveResultToYaml(resultMap);
+
+    RCLCPP_INFO(this->get_logger(), "image detector threade done");
 }
 
 void MonocularSlamNode::publishCameraPose(std::vector<geometry_msgs::msg::PoseStamped>& poses)
@@ -386,10 +435,26 @@ void MonocularSlamNode::GrabImage(const ImageMsg::SharedPtr msg)
     static unsigned long frameId = 0;
 
     frameId++;
-    imgBuff.push(frameId, m_cvImPtr->image);
+    {
+        std::unique_lock<std::mutex> lock(syncMutex);
+        imgBuff.push_back({frameId, m_cvImPtr->image});
+    }
+    if (m_cvImPtr->image.rows <= 0)
+    {
+        RCLCPP_ERROR(this->get_logger(), "empty img");
+    }
     m_SLAM->TrackMonocular(m_cvImPtr->image, Utility::StampToSec(msg->header.stamp));
+    RCLCPP_INFO(this->get_logger(), "Pub img %ld", frameId);
     checkKF();
-    // RCLCPP_INFO(this->get_logger(), "Frame counter %ld", frameId);
+
+    {
+        std::unique_lock<std::mutex> lock(syncMutex);
+
+        if (imgBufSize < imgBuff.size())
+        {
+            imgBuff.pop_front();
+        }
+    }
 }
 
 geometry_msgs::msg::Point MonocularSlamNode::foundCentroid(std::vector<geometry_msgs::msg::Point>& points)
@@ -409,4 +474,22 @@ geometry_msgs::msg::Point MonocularSlamNode::foundCentroid(std::vector<geometry_
     centroid.z /= size;
 
     return centroid;
+}
+
+void MonocularSlamNode::saveResultToYaml(const std::map<std::string, float>& data)
+{
+    YAML::Emitter emitter;
+    emitter << YAML::BeginMap;
+
+    for (const auto& pair : data)
+    {
+        emitter << YAML::Key << pair.first;
+        emitter << YAML::Value << pair.second;
+    }
+
+    emitter << YAML::EndMap;
+    auto fileName = package_dir + "/result/res.yaml";
+    std::ofstream fout(fileName);
+    fout << emitter.c_str();
+    fout.close();
 }

@@ -440,7 +440,7 @@ std::vector<Detection> YOLO11Detector::detect(const cv::Mat& image, int classId,
         std::vector<Detection> detectionForClass;
         for (auto& det : detections)
         {
-            if (det.classId == classId)
+            if (det.classId == classId && det.conf > CONFIDENCE_THRESHOLD)
             {
                 detectionForClass.push_back(det);
             }

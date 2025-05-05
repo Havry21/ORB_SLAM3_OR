@@ -25,7 +25,8 @@ def generate_launch_description():
         ],
         parameters=[{
             "use_visualization": LaunchConfiguration("use_visualization"),
-            "yolo_model": LaunchConfiguration("yolo_model")
+            "yolo_model": LaunchConfiguration("yolo_model"),
+            "save_imgs": LaunchConfiguration("save_imgs")
         }]
     )
 
@@ -72,12 +73,14 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 name="use_visualization",
                 default_value="False",
-                description="Start RViz",
+            ),
+            DeclareLaunchArgument(
+                name="save_imgs",
+                default_value="True",
             ),
             DeclareLaunchArgument(
                 name="yolo_model",
                 default_value="yolo11n",
-                description="Start RViz",
             ),
             DeclareLaunchArgument(
                 name="use_rviz",

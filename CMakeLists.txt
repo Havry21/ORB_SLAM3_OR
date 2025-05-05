@@ -27,6 +27,7 @@ find_package(visualization_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav2_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
+find_package(yaml-cpp REQUIRED)
 
 include_directories(
   include
@@ -43,7 +44,7 @@ add_executable(mono
   src/yolo/src/image_inference.cpp
   src/yolo/src/YOLO11.cpp
 )
-target_link_libraries(mono ${ONNXRUNTIME_DIR}/lib/libonnxruntime.so)
+target_link_libraries(mono ${ONNXRUNTIME_DIR}/lib/libonnxruntime.so yaml-cpp)
 
 ament_target_dependencies(mono rclcpp sensor_msgs cv_bridge ORB_SLAM3 Pangolin OpenCV tf2_ros ament_index_cpp visualization_msgs geometry_msgs nav_msgs)
 
@@ -63,6 +64,11 @@ install(
 install(
   DIRECTORY  ${ONNXRUNTIME_DIR}/lib/
   DESTINATION lib
+)
+
+install(
+  DIRECTORY
+  DESTINATION share/${PROJECT_NAME}/result/img
 )
 
 ament_package()
