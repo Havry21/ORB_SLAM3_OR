@@ -39,7 +39,7 @@
 /**
  * @brief Confidence threshold for filtering detections.
  */
-const float CONFIDENCE_THRESHOLD = 0.7f;
+const float CONFIDENCE_THRESHOLD = 0.70f;
 
 /**
  * @brief  IoU threshold for filtering detections.

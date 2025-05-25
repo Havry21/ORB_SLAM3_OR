@@ -50,7 +50,7 @@ private:
     uint64_t calculateMedian(std::vector<uint64_t>& numbers);
 
     geometry_msgs::msg::Point foundCentroid(std::vector<geometry_msgs::msg::Point>& points);
-    Clustering::DBSCAN dbScan = Clustering::DBSCAN(0.07, 4);
+    Clustering::DBSCAN dbScan = Clustering::DBSCAN(0.08, 2);
     ORB_SLAM3::System* m_SLAM;
     rclcpp::TimerBase::SharedPtr timer_;
     cv_bridge::CvImagePtr m_cvImPtr;
@@ -61,7 +61,7 @@ private:
     PointPub mapPointPublisher;
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr trajectoryPointPublisher;
     std::shared_ptr<tf2_ros::StaticTransformBroadcaster> tfStaticCamera;
-    std::list<unsigned long> objectPointId;
+    std::unordered_set<unsigned long> objectPointId;
     std::list<std::pair<long unsigned int, cv::Mat>> imgBuff;
     const size_t imgBufSize = 30;
 

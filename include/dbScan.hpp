@@ -13,7 +13,7 @@ namespace Clustering
     class DBSCAN
     {
     public:
-        DBSCAN(double eps, size_t minPts, double precision = 1e-6)
+        DBSCAN(double eps, size_t minPts, double precision = 1e-3)
             : eps_(eps), minPts_(minPts), precision_(precision) {}
 
         struct ClusterResult

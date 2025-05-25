@@ -20,7 +20,8 @@ def generate_launch_description():
         output=["screen"],
         arguments=[
             "/home/dima/diplom_ros/src/orbslam3_ros2/vocabulary/ORBvoc.txt",
-            "/home/dima/diplom_ros/src/orbslam3_ros2/config/monocular/EuRoC.yaml",
+            "/home/dima/diplom_ros/src/orbslam3_ros2/config/razer_kiyo_pro.yaml",
+            # "/home/dima/diplom_ros/src/orbslam3_ros2/config/RealSense_D435i.yaml",
             "false",
         ],
         parameters=[{
@@ -33,18 +34,47 @@ def generate_launch_description():
     # ros2 run usb_cam usb_cam_node_exe --ros-args --params-file ~/diplom_ros/src/orbslam3_ros2/config/camera_param.yaml
     # ros2 run v4l2_camera v4l2_camera_node --ros-args video_device:="/dev/video2"
     camera_node = Node(
-        package="usb_cam",
-        executable="usb_cam_node_exe",
+        package="v4l2_camera",
+        executable="v4l2_camera_node",
         output=["screen"],
-        arguments=["params-file ~/diplom_ros/src/orbslam3_ros2/config/camera_param.yaml"],
+        parameters=[{'video_device': '/dev/video2'}],
+        # parameters=[{'params-file': '~/diplom_ros/src/orbslam3_ros2/config/camera_param.yaml'}],
+            remappings=[
+                ('/image_raw', '/cam0/image_raw'),
+            ],
     )
+
+    realsensCamera = Node(
+            package='realsense2_camera',
+            executable='realsense2_camera_node',
+            name='realsense2_camera',
+            namespace='camera',
+            parameters=[{
+                'align_depth': False,
+                'enable_color': True,  
+                'enable_depth': False,  
+                'color_width': 640,    
+                'color_height': 480,   
+                'color_fps': 15,     
+                # 'enable_gyro' : True,
+                # 'enable_accel' : True,
+            }],
+            remappings=[
+                ('/camera/realsense2_camera/color/image_raw', '/cam0/image_raw'),
+            ],
+            output='screen'  # Вывод логов в терминал
+        )
+
 
     sim = ExecuteProcess(
         cmd=[
             "ros2",
             "bag",
             "play",
-            '/media/dima/additional/datasetTUM/freiburg2_desk',
+            "-r 0.5",
+            # "--remap",
+            # "/cam0/image_raw:=/camera/rgb/image_color",
+            "/media/dima/additional/dataset/office4",
         ],
         output="screen",
     )
@@ -57,7 +87,7 @@ def generate_launch_description():
     )
 
     default_rviz_config_path = os.path.join(orbslam3_dir, "rviz/marker.rviz")
-    print(default_rviz_config_path)
+
     rviz_node = Node(
         condition=IfCondition((use_rviz)),
         package="rviz2",
@@ -67,6 +97,7 @@ def generate_launch_description():
         arguments=["-d", default_rviz_config_path],
     )
     run_rviz_node = TimerAction(period=8.0, actions=[rviz_node])
+    run_sim_node = TimerAction(period=2.0, actions=[sim])
 
     return LaunchDescription(
         [
@@ -88,10 +119,10 @@ def generate_launch_description():
                 description="Start RViz",
             ),
             orb_slam3_node,
-            sim,
+            run_sim_node,
+            # realsensCamera,
             tf_static_node,
-            run_rviz_node
-            # rviz_node,
+            run_rviz_node,
             # camera_node,
         ]
     )

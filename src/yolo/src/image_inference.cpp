@@ -7,7 +7,7 @@ ImageDetector::ImageDetector(std::string modelName, bool _showDebugWindow, bool 
     outputDir += package_dir + "/result/img";
     labelsPath = package_dir + labelsPath;
     modelPath = package_dir + "/models/" + modelName + ".onnx";
-    detector = YOLO11Detector(modelPath, labelsPath);
+    detector = YOLO11Detector(modelPath, labelsPath, false);
     showDebugWindow = _showDebugWindow;
     saveImg = _saveImg;
     if (showDebugWindow || saveImg)
@@ -41,7 +41,7 @@ void ImageDetector::showAndSaveImage()
         if (showDebugWindow)
         {
             cv::imshow("Detections", frame);
-            cv::waitKey(30);
+            cv::waitKey(1);
         }
 
         if (saveImg)
@@ -85,7 +85,7 @@ std::list<ObjCoord>* ImageDetector::processImage(cv::Mat& image)
         int x = res.box.x + res.box.width / 2;
         int y = res.box.y + res.box.height / 2;
         int r = std::min(res.box.width, res.box.height) / 2;
-        coordinate.push_back({.x = x, .y = y, .r = r});
+        coordinate.push_back({.x = x, .y = y, .rx = res.box.width / 2, .ry = res.box.height / 2});
     }
     return &coordinate;
 }

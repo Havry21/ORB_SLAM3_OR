@@ -10,7 +10,7 @@ def generate_launch_description():
             "bag",
             "play",
             "--loop",
-            "/media/dima/additional/datasetTUM/rgbd_dataset_freiburg2_pioneer_slam3",
+            "/media/dima/additional/dataset/kitchen",
         ],
         output="screen",
     )

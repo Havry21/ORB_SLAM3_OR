@@ -3,7 +3,7 @@ project(orbslam3)
 
 set(ENV{PYTHONPATH} "/opt/ros/jazzy/lib/python3.12/site-packages/")
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_CURRENT_SOURCE_DIR}/CMakeModules)
-set(ONNXRUNTIME_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/yolo/onnxruntime-linux-x64-1.20.1)
+set(ONNXRUNTIME_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/yolo/onnxruntime-linux-x64-gpu-1.22.0)
 
 if(NOT CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD 20)
@@ -44,7 +44,7 @@ add_executable(mono
   src/yolo/src/image_inference.cpp
   src/yolo/src/YOLO11.cpp
 )
-target_link_libraries(mono ${ONNXRUNTIME_DIR}/lib/libonnxruntime.so yaml-cpp)
+target_link_libraries(mono ${ONNXRUNTIME_DIR}/lib/libonnxruntime.so ${ONNXRUNTIME_DIR}/lib/libonnxruntime_providers_cuda.so yaml-cpp)
 
 ament_target_dependencies(mono rclcpp sensor_msgs cv_bridge ORB_SLAM3 Pangolin OpenCV tf2_ros ament_index_cpp visualization_msgs geometry_msgs nav_msgs)
 

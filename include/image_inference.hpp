@@ -12,7 +12,8 @@ struct ObjCoord
 {
     float x;
     float y;
-    float r;
+    float rx;
+    float ry;
 };
 
 class ImageDetector

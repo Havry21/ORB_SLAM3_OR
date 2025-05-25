@@ -1,6 +1,6 @@
 add_library(yolo STATIC)
 
-set(ONNXRUNTIME_DIR onnxruntime-linux-x64-1.20.1)
+set(ONNXRUNTIME_DIR onnxruntime-linux-x64-gpu-1.22.0)
 message(STATUS "ONNXRUNTIME_DIR: ${ONNXRUNTIME_DIR}")
 
 find_package(OpenCV REQUIRED)

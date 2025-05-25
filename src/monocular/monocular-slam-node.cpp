@@ -28,7 +28,8 @@ MonocularSlamNode::MonocularSlamNode(ORB_SLAM3::System* pSLAM, bool _visualizati
 
     m_SLAM = pSLAM;
     m_image_subscriber = this->create_subscription<ImageMsg>(
-        "/camera/rgb/image_color",
+        "/cam0/image_raw",
+        // "/camera/rgb/image_color",
         // "/image_raw",
         10,
         std::bind(&MonocularSlamNode::GrabImage, this, std::placeholders::_1));
@@ -55,6 +56,7 @@ MonocularSlamNode::~MonocularSlamNode()
     stopThread = true;
 
     processCV.notify_all();
+    processPub.notify_all();
     RCLCPP_INFO(this->get_logger(), "Notify thread");
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
@@ -167,49 +169,68 @@ void MonocularSlamNode::visualizerLoop()
         }
         auto startTime = std::chrono::steady_clock::now();
 
-        auto activeMap = m_SLAM->mpAtlas->GetCurrentMap();
-        const auto vpMPs = activeMap->GetAllMapPoints();
-
-        if (vpMPs.empty())
-            continue;
-
-        for (const auto& it : vpMPs)
+        const auto maps = m_SLAM->mpAtlas->GetAllMaps();
+        for (const auto& map : maps)
         {
-            auto pose = it->GetWorldPos();
-            geometry_msgs::msg::Point p1;
-            p1.x = pose[0];
-            p1.z = pose[1];
-            p1.y = pose[2];
-            if (std::ranges::find(objectPointId, it->mnId) != objectPointId.end())
+            const auto vpMPs = map->GetAllMapPoints();
+            if (vpMPs.empty())
+                continue;
+
+            for (const auto& it : vpMPs)
             {
-                ObjectPointsUnsort.push_back(p1);
-                if (ObjectPointsUnsort.size() < 3)
+                auto pose = it->GetWorldPos();
+                geometry_msgs::msg::Point p1;
+                p1.x = pose[0];
+                p1.z = pose[1];
+                p1.y = pose[2];
+                if (std::ranges::find(objectPointId, it->mnId) != objectPointId.end())
                 {
-                    RCLCPP_INFO(this->get_logger(), "Point coord %.2f,%.2f,%.2f",
-                                p1.x, p1.z, p1.y);
+                    ObjectPointsUnsort.push_back(p1);
+                    if (ObjectPointsUnsort.size() < 3)
+                    {
+                        RCLCPP_INFO(this->get_logger(), "Point coord %.2f,%.2f,%.2f",
+                                    p1.x, p1.z, p1.y);
+                    }
+                }
+                {
+                    pointsMaps.push_back(p1);
                 }
             }
-            {
-                pointsMaps.push_back(p1);
-            }
         }
 
-        if (ObjectPointsUnsort.size() > 2)
+        if (ObjectPointsUnsort.size() > 1)
         {
             RCLCPP_INFO(this->get_logger(), "Num of unsort point %ld", ObjectPointsUnsort.size());
-            auto result = dbScan.cluster(ObjectPointsUnsort);
-            RCLCPP_INFO(this->get_logger(), "Num of objects %ld, point in object %ld, num of noise points %ld",
-                        result.clusters.size(), result.clusters[0].size(), result.noise.size());
-            for (auto& points : result.clusters)
+            try
             {
-                ObjectPointsSort.push_back(foundCentroid(points));
+                // RCLCPP_INFO(this->get_logger(), "Prepare clastering, size of obj %ld",ObjectPointsUnsort.size() );
+                auto result = dbScan.cluster(ObjectPointsUnsort);
+                RCLCPP_INFO(this->get_logger(), "end clastering");
+                RCLCPP_INFO(this->get_logger(), "Num of objects %ld",
+                            result.clusters.size());
+                RCLCPP_INFO(this->get_logger(), "Prepare add in claster");
+                for (auto& points : result.clusters)
+                {
+                    ObjectPointsSort.push_back(foundCentroid(points));
+                }
+            } catch (const char* error_message)
+            {
+                RCLCPP_ERROR(this->get_logger(), "Error in dbscan %s", error_message);
+                // std::cout << error_message << std::endl;
             }
         }
-        publishCameraPoses();
-        publishPoint(mapPointPublisher, pointsMaps, colorMaps, scaleMaps);
-        publishPoint(objectPointPublisher, ObjectPointsSort, colorObjects, scaleObjects);
-        publishCameraPoses();
-
+        RCLCPP_INFO(this->get_logger(), "Prepare to publish");
+        try
+        {
+            publishCameraPoses();
+            publishPoint(mapPointPublisher, pointsMaps, colorMaps, scaleMaps);
+            publishPoint(objectPointPublisher, ObjectPointsSort, colorObjects, scaleObjects);
+            publishCameraPoses();
+        } catch (const char* error_message)
+        {
+            RCLCPP_ERROR(this->get_logger(), "Error in publish point %s", error_message);
+            // std::cout << error_message << std::endl;
+        }
         sizeOfPointsMaps = pointsMaps.size();
         sizeOfObjectPointsUnsort = ObjectPointsSort.size();
         sizeOfObjectPointsSort = ObjectPointsUnsort.size();
@@ -323,33 +344,44 @@ void MonocularSlamNode::imageLoop()
         }
         if (! img.empty())
         {
-            auto startDecodeImgTime = std::chrono::steady_clock::now();
-
-            auto objCoord = imgDtct.processImage(img);
-            if (! objCoord->empty())
+            try
             {
-                RCLCPP_INFO(this->get_logger(), "Detect %ld object", objCoord->size());
-                for (const auto& coord : *objCoord)
+                auto startDecodeImgTime = std::chrono::steady_clock::now();
+
+                auto objCoord = imgDtct.processImage(img);
+                auto imgProccesTime = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startDecodeImgTime).count();
+                if (! objCoord->empty())
                 {
-                    RCLCPP_INFO(this->get_logger(), "Coord {%f,%f,%f} ", coord.x, coord.y, coord.r);
-                    // coord.r * 0.8: because there may be a point on the edges that is not visible to the object.
-                    auto p = _lastKF->GetFeaturesInArea(coord.x, coord.y, coord.r * 0.8);
-                    if (! p.empty())
+                    RCLCPP_INFO(this->get_logger(), "Detect %ld object", objCoord->size());
+                    for (const auto& coord : *objCoord)
                     {
-                        for (const auto& point : p)
+                        RCLCPP_INFO(this->get_logger(), "Coord {%f,%f,%f,%f} ", coord.x, coord.y, coord.rx, coord.ry);
+                        // coord.r * 0.7: because there may be a point on the edges that is not visible to the object.
+                        // auto p = _lastKF->GetFeaturesInArea(coord.x, coord.y, coord.rx * 0.7, coord.ry * 0.7);
+
+                        auto p = _lastKF->GetFeaturesInSquare(coord.x, coord.y, coord.rx * 0.7, coord.ry * 0.7);
+                        if (! p.empty())
                         {
-                            auto _mapPoint = _lastKF->GetMapPoint(point);
-                            if (_mapPoint && ! _mapPoint->isBad())
+                            for (const auto& point : p)
                             {
-                                objectPointId.push_back(_mapPoint->mnId);
+                                auto _mapPoint = _lastKF->GetMapPoint(point);
+                                if (_mapPoint && ! _mapPoint->isBad())
+                                {
+                                    objectPointId.insert(_mapPoint->mnId);
+                                }
                             }
                         }
                     }
                 }
+                auto dt = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startDecodeImgTime).count();
+                timeDecodeImg.push_back(dt);
+                RCLCPP_INFO(this->get_logger(), "Image processed successfully, \n for %ld ms, total %ld ms", imgProccesTime, dt);
+                RCLCPP_INFO(this->get_logger(), "Size of objectPointId %ld", objectPointId.size());
+            } catch (const char* error_message)
+            {
+                RCLCPP_ERROR(this->get_logger(), "Error %s", error_message);
+                // std::cout << error_message << std::endl;
             }
-            auto dt = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startDecodeImgTime).count();
-            timeDecodeImg.push_back(dt);
-            RCLCPP_INFO(this->get_logger(), "Image processed successfully, \n for %ld ms", dt);
         }
         else
         {
@@ -383,7 +415,7 @@ void MonocularSlamNode::imageLoop()
         {"numOfMapPoints", sizeOfPointsMaps},
         {"numOfObjPoints", sizeOfObjectPointsUnsort},
         {"numOfFilteredObjPoints", sizeOfObjectPointsSort},
-    };
+        {"thrh", CONFIDENCE_THRESHOLD}};
     saveResultToYaml(resultMap);
 
     RCLCPP_INFO(this->get_logger(), "image detector threade done");
@@ -433,7 +465,13 @@ void MonocularSlamNode::GrabImage(const ImageMsg::SharedPtr msg)
         return;
     }
     static unsigned long frameId = 0;
+    static unsigned long counter = 0;
 
+    // counter++;
+    // if (counter % 5 == 0)
+    // {
+    //     return;
+    // }
     frameId++;
     {
         std::unique_lock<std::mutex> lock(syncMutex);
@@ -444,7 +482,7 @@ void MonocularSlamNode::GrabImage(const ImageMsg::SharedPtr msg)
         RCLCPP_ERROR(this->get_logger(), "empty img");
     }
     m_SLAM->TrackMonocular(m_cvImPtr->image, Utility::StampToSec(msg->header.stamp));
-    RCLCPP_INFO(this->get_logger(), "Pub img %ld", frameId);
+    RCLCPP_DEBUG(this->get_logger(), "Pub img %ld", frameId);
     checkKF();
 
     {
