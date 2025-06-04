@@ -21,7 +21,7 @@ def generate_launch_description():
             "ros2",
             "bag",
             "play",
-            "-r 10.0",
+            "-r 5.0",
             # "--remap",
             # "/cam0/image_raw:=/camera/rgb/image_color",
             "/media/dima/additional/dataset/office6_RGBD1_point_final",
@@ -47,6 +47,14 @@ def generate_launch_description():
         output="screen",
         arguments=["-d", default_rviz_config_path],
     )
+    
+    
+    video_node = Node(
+        package="rqt_image_view",
+        executable="rqt_image_view",
+        output="screen",
+    )
+    
     return LaunchDescription(
         [
             DeclareLaunchArgument(
@@ -68,6 +76,7 @@ def generate_launch_description():
             ),
             sim,
             rviz_node,
-            tf_static_node
+            tf_static_node,
+            video_node
         ]
     )

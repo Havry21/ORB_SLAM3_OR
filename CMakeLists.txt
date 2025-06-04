@@ -28,6 +28,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(nav2_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(yaml-cpp REQUIRED)
+find_package(message_filters REQUIRED)
 
 include_directories(
   include
@@ -38,17 +39,33 @@ include_directories(
 
 link_directories(include)
 
+add_library(yolo 
+  src/yolo/src/image_inference.cpp
+  src/yolo/src/YOLO11.cpp)
+target_link_libraries(yolo ${ONNXRUNTIME_DIR}/lib/libonnxruntime.so ${ONNXRUNTIME_DIR}/lib/libonnxruntime_providers_cuda.so yaml-cpp)
+ament_target_dependencies(yolo ament_index_cpp OpenCV)
+
 add_executable(mono
   src/monocular/mono.cpp
-  src/monocular/monocular-slam-node.cpp
-  src/yolo/src/image_inference.cpp
-  src/yolo/src/YOLO11.cpp
-)
-target_link_libraries(mono ${ONNXRUNTIME_DIR}/lib/libonnxruntime.so ${ONNXRUNTIME_DIR}/lib/libonnxruntime_providers_cuda.so yaml-cpp)
+  src/monocular/monocular-slam-node.cpp)
+target_link_libraries(mono yolo)
 
-ament_target_dependencies(mono rclcpp sensor_msgs cv_bridge ORB_SLAM3 Pangolin OpenCV tf2_ros ament_index_cpp visualization_msgs geometry_msgs nav_msgs)
+ament_target_dependencies(mono rclcpp sensor_msgs cv_bridge ORB_SLAM3 Pangolin tf2_ros ament_index_cpp visualization_msgs geometry_msgs nav_msgs)
 
 install(TARGETS mono
+  DESTINATION lib/${PROJECT_NAME})
+
+
+add_executable(rgbd
+  src/monocular/rgbd.cpp
+  src/monocular/rgbd-slam-node.cpp
+  src/monocular/monocular-slam-node.cpp)
+  
+target_link_libraries(rgbd yolo)
+
+ament_target_dependencies(rgbd rclcpp sensor_msgs cv_bridge ORB_SLAM3 Pangolin tf2_ros ament_index_cpp visualization_msgs geometry_msgs nav_msgs)
+
+install(TARGETS rgbd
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY launch config vocabulary rviz
