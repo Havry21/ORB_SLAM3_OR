@@ -18,19 +18,22 @@ MonocularSlamNode::MonocularSlamNode(ORB_SLAM3::System* pSLAM, bool _visualizati
 
     this->declare_parameter<std::string>("yolo_model", "yolo11n");
 
+    this->declare_parameter<int>("DSminPoint", 4);
+    this->declare_parameter<float>("DSsize", 0.08);
+
     yoloName = this->get_parameter("yolo_model").as_string();
     visualization = this->get_parameter("use_visualization").as_bool();
     saveImgs = this->get_parameter("save_imgs").as_bool();
+    // dbScan = Clustering::DBSCAN(this->get_parameter("DSsize").as_double(), this->get_parameter("DSminPoint").as_int());
 
     RCLCPP_INFO(this->get_logger(), "Yolo version %s", yoloName.data());
     RCLCPP_INFO(this->get_logger(), "Visualization %s", (visualization ? "Enable" : "Disable"));
     RCLCPP_INFO(this->get_logger(), "Save img %s", (saveImgs ? "Enable" : "Disable"));
 
     m_SLAM = pSLAM;
+
     m_image_subscriber = this->create_subscription<ImageMsg>(
         "/cam0/image_raw",
-        // "/camera/rgb/image_color",
-        // "/image_raw",
         10,
         std::bind(&MonocularSlamNode::GrabImage, this, std::placeholders::_1));
 

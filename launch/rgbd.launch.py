@@ -16,33 +16,20 @@ def generate_launch_description():
 
     orb_slam3_node = Node(
         package="orbslam3",
-        executable="mono",
+        executable="rgbd",
         output=["screen"],
         arguments=[
             "/home/dima/diplom_ros/src/orbslam3_ros2/vocabulary/ORBvoc.txt",
-            "/home/dima/diplom_ros/src/orbslam3_ros2/config/razer_kiyo_pro.yaml",
-            # "/home/dima/diplom_ros/src/orbslam3_ros2/config/RealSense_D435i.yaml",
+            "/home/dima/diplom_ros/src/orbslam3_ros2/config/rgb-d/RealSense_D435i.yaml",
             "false",
-            "mono",
         ],
         parameters=[{
             "use_visualization": LaunchConfiguration("use_visualization"),
             "yolo_model": LaunchConfiguration("yolo_model"),
-            "save_imgs": LaunchConfiguration("save_imgs")
+            "save_imgs": LaunchConfiguration("save_imgs"),
+            # "DSminPoint": LaunchConfiguration("DSminPoint"),
+            # "DSsize": LaunchConfiguration("DSsize")
         }]
-    )
-
-    # ros2 run usb_cam usb_cam_node_exe --ros-args --params-file ~/diplom_ros/src/orbslam3_ros2/config/camera_param.yaml
-    # ros2 run v4l2_camera v4l2_camera_node --ros-args video_device:="/dev/video2"
-    camera_node = Node(
-        package="v4l2_camera",
-        executable="v4l2_camera_node",
-        output=["screen"],
-        parameters=[{'video_device': '/dev/video2'}],
-        # parameters=[{'params-file': '~/diplom_ros/src/orbslam3_ros2/config/camera_param.yaml'}],
-            remappings=[
-                ('/image_raw', '/cam0/image_raw'),
-            ],
     )
 
     realsensCamera = Node(
@@ -51,17 +38,13 @@ def generate_launch_description():
             name='realsense2_camera',
             namespace='camera',
             parameters=[{
-                'align_depth': False,
+                'align_depth': True,
                 'enable_color': True,  
-                'enable_depth': False,  
-                'color_width': 640,    
-                'color_height': 480,   
-                'color_fps': 15,     
-                # 'enable_gyro' : True,
-                # 'enable_accel' : True,
+                'enable_depth': True,  
             }],
             remappings=[
-                ('/camera/realsense2_camera/color/image_raw', '/cam0/image_raw'),
+                ('/camera/realsense2_camera/color/image_raw', 'camera/rgb'),
+                ('/camera/realsense2_camera/depth/image_rect_raw', 'camera/depth'),
             ],
             output='screen'  # Вывод логов в терминал
         )
@@ -72,10 +55,10 @@ def generate_launch_description():
             "ros2",
             "bag",
             "play",
-            "-r 0.7",
+            "-r 0.5",
             # "--remap",
             # "/cam0/image_raw:=/camera/rgb/image_color",
-            "/media/dima/additional/dataset/office4",
+            "/media/dima/additional/dataset/office6_RGBD",
         ],
         output="screen",
     )
@@ -102,6 +85,14 @@ def generate_launch_description():
 
     return LaunchDescription(
         [
+            # DeclareLaunchArgument(
+            #     name="DSminPoint",
+            #     default_value='4',
+            # ),
+            # DeclareLaunchArgument(
+            #     name="DSsize",
+            #     default_value='0.08',
+            # ),
             DeclareLaunchArgument(
                 name="use_visualization",
                 default_value="False",
@@ -124,6 +115,5 @@ def generate_launch_description():
             # realsensCamera,
             tf_static_node,
             run_rviz_node,
-            # camera_node,
         ]
     )

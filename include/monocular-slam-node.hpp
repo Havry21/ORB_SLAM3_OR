@@ -32,11 +32,12 @@ class MonocularSlamNode : public rclcpp::Node
 public:
     MonocularSlamNode(ORB_SLAM3::System* pSLAM, bool _visualization);
 
-    ~MonocularSlamNode();
+    virtual ~MonocularSlamNode();
 
-private:
+protected:
     using ImageMsg = sensor_msgs::msg::Image;
     using PointPub = rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr;
+
     void GrabImage(const sensor_msgs::msg::Image::SharedPtr msg);
     void checkKF();
     void imageLoop();
@@ -50,7 +51,7 @@ private:
     uint64_t calculateMedian(std::vector<uint64_t>& numbers);
 
     geometry_msgs::msg::Point foundCentroid(std::vector<geometry_msgs::msg::Point>& points);
-    Clustering::DBSCAN dbScan = Clustering::DBSCAN(0.08, 2);
+    Clustering::DBSCAN dbScan = Clustering::DBSCAN(0.25, 2);
     ORB_SLAM3::System* m_SLAM;
     rclcpp::TimerBase::SharedPtr timer_;
     cv_bridge::CvImagePtr m_cvImPtr;
@@ -63,7 +64,7 @@ private:
     std::shared_ptr<tf2_ros::StaticTransformBroadcaster> tfStaticCamera;
     std::unordered_set<unsigned long> objectPointId;
     std::list<std::pair<long unsigned int, cv::Mat>> imgBuff;
-    const size_t imgBufSize = 30;
+    const size_t imgBufSize = 40;
 
     std::string package_dir;
     std::thread imageProcessThread;
@@ -91,5 +92,4 @@ private:
     size_t sizeOfPointsMaps;
     size_t sizeOfObjectPointsUnsort;
     size_t sizeOfObjectPointsSort;
-
 };
